@@ -1,4 +1,7 @@
 # 用途: cjt.py 的 stdlib unittest; 运行: cd scripts; py -3 -m unittest test_cjt -v
+import contextlib
+import io
+import json
 import os
 import shutil
 import tempfile
@@ -257,6 +260,83 @@ class TestFindRoot(unittest.TestCase):
         # 临时目录的祖先是否有 .git 不受测试控制, 只验证类型契约
         result = cjt.find_root(self.top)
         self.assertTrue(result is None or isinstance(result, str))
+
+
+def _run_cli(*argv):
+    """直调 main, 捕获 stdout/stderr 与退出码。"""
+    out, err = io.StringIO(), io.StringIO()
+    code = 0
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            cjt.main(list(argv))
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else 1
+    return code, out.getvalue(), err.getvalue()
+
+
+class TestCli(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        os.makedirs(os.path.join(self.root, "src"))
+        with open(os.path.join(self.root, "src", "a.c"), "w",
+                  encoding="utf-8", newline="") as f:
+            f.write("int x;\nint y;\n")
+        self.doc = os.path.join(self.root, "doc.md")
+        with open(self.doc, "w", encoding="utf-8", newline="") as f:
+            f.write("見 `src/a.c:2` 与 src/gone.c:1\n")
+
+    def read_doc(self):
+        with open(self.doc, "r", encoding="utf-8", newline="") as f:
+            return f.read()
+
+    def test_convert_json(self):
+        code, out, _ = _run_cli("convert", self.doc, "--root", self.root,
+                                "--format", "json")
+        self.assertEqual(code, 0)
+        rep = json.loads(out)
+        self.assertEqual(rep["converted"], 1)
+        self.assertEqual(rep["misses"][0]["ref"], "src/gone.c:1")
+        self.assertEqual(rep["misses"][0]["reason"], "file-not-found")
+        self.assertFalse(rep["dry_run"])
+        expected_url = cjt.build_url("src/a.c", 2, "int y;")
+        self.assertIn("[`src/a.c:2`](%s)" % expected_url, self.read_doc())
+
+    def test_dry_run_leaves_file(self):
+        before = self.read_doc()
+        code, out, _ = _run_cli("convert", self.doc, "--root", self.root,
+                                "--dry-run", "--format", "json")
+        self.assertEqual(code, 0)
+        self.assertTrue(json.loads(out)["dry_run"])
+        self.assertEqual(self.read_doc(), before)
+
+    def test_convert_missing_doc_exits_1(self):
+        code, _, err = _run_cli("convert", os.path.join(self.root, "nope.md"),
+                                "--root", self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("nope.md", err)
+
+    def test_link_json(self):
+        code, out, _ = _run_cli("link", "src/a.c:2", "--root", self.root,
+                                "--format", "json")
+        self.assertEqual(code, 0)
+        rep = json.loads(out)
+        self.assertEqual(rep["url"], cjt.build_url("src/a.c", 2, "int y;"))
+        self.assertEqual(rep["markdown"], "[`src/a.c:2`](%s)" % rep["url"])
+
+    def test_link_custom_label(self):
+        code, out, _ = _run_cli("link", "src/a.c:2", "第二行", "--root", self.root)
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("[第二行](vscode://"))
+
+    def test_link_bad_ref_exits_1(self):
+        code, _, err = _run_cli("link", "http://x:80", "--root", self.root)
+        self.assertEqual(code, 1)
+
+    def test_link_out_of_range_exits_1(self):
+        code, _, err = _run_cli("link", "src/a.c:99", "--root", self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("line-out-of-range", err)
 
 
 if __name__ == "__main__":

@@ -210,6 +210,99 @@ def find_root(start):
         d = parent
 
 # ===== 5 App: 命令表 + CLI 入口 =====
+def _die(msg):
+    print("cjt: " + msg, file=sys.stderr)
+    sys.exit(1)
+
+
+def _resolve_root(args):
+    root = args.root or find_root(os.getcwd())
+    if not root:
+        _die("无法从当前目录向上找到 .git; 请用 --root 指定工作区根")
+    return root
+
+
+def cmd_convert(args):
+    root = _resolve_root(args)
+    try:
+        with open(args.doc, "r", encoding="utf-8", newline="") as f:
+            text = f.read()
+    except FileNotFoundError:
+        _die("文档不存在: " + args.doc)
+    except UnicodeDecodeError:
+        _die("文档不是 UTF-8: " + args.doc)
+    resolver = make_fs_resolver(root, args.encoding)
+    new_text, converted, misses = convert_text(text, resolver)
+    if not args.dry_run and new_text != text:
+        with open(args.doc, "w", encoding="utf-8", newline="") as f:
+            f.write(new_text)
+    report = {
+        "doc": args.doc,
+        "root": os.path.abspath(root).replace("\\", "/"),
+        "converted": converted,
+        "misses": misses,
+        "dry_run": args.dry_run,
+    }
+    if args.format == "json":
+        print(json.dumps(report, ensure_ascii=False))
+    else:
+        print("converted %d, misses %d%s" % (
+            converted, len(misses), " (dry-run)" if args.dry_run else ""))
+        for ms in misses:
+            print("  miss %s (doc:%d) %s" % (
+                ms["ref"], ms["line_in_doc"], ms["reason"]))
+
+
+def cmd_link(args):
+    root = _resolve_root(args)
+    ref = parse_ref(args.ref)
+    if not ref:
+        _die("无法解析引用: %s (期望 path:line 或 path:line-end)" % args.ref)
+    resolver = make_fs_resolver(root, args.encoding)
+    status, payload = resolver(ref.path)
+    if status != "ok":
+        _die("%s: %s" % (status, ref.path))
+    rel, src_lines = payload
+    if ref.line > len(src_lines):
+        _die("line-out-of-range: %s (文件共 %d 行)" % (args.ref, len(src_lines)))
+    url = build_url(rel, ref.line, src_lines[ref.line - 1])
+    label = args.label if args.label else "`" + args.ref + "`"
+    md = "[" + label + "](" + url + ")"
+    if args.format == "json":
+        print(json.dumps({"markdown": md, "url": url}, ensure_ascii=False))
+    else:
+        print(md)
+
+
+COMMANDS = {"convert": cmd_convert, "link": cmd_link}
+
+
+def _add_common(p):
+    p.add_argument("--root", help="工作区根(缺省: 从 cwd 向上找 .git)")
+    p.add_argument("--encoding", help="源文件编码(缺省: utf-8 失败回退 cp936)")
+    p.add_argument("--format", choices=("json", "text"), default="text")
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        prog="cjt", description="Code Jump Tags CLI: path:line 引用 -> vscode:// 跳转链接")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    pc = sub.add_parser("convert", help="原地转换 markdown 文档中的全部代码引用")
+    pc.add_argument("doc", help="markdown 文档路径(UTF-8)")
+    pc.add_argument("--dry-run", action="store_true", help="只报告, 不写文件")
+    _add_common(pc)
+    pl = sub.add_parser("link", help="生成单条跳转链接")
+    pl.add_argument("ref", help="path:line 或 path:line-end")
+    pl.add_argument("label", nargs="?", help="链接标签(缺省: `ref` 行内代码样式)")
+    _add_common(pl)
+    args = ap.parse_args(argv)
+    COMMANDS[args.cmd](args)
+
 
 if __name__ == "__main__":
-    pass
+    try:
+        sys.stdout.reconfigure(errors="replace")   # 防 GBK 控制台打印异常字符崩溃
+        sys.stderr.reconfigure(errors="replace")
+    except AttributeError:
+        pass
+    main()
