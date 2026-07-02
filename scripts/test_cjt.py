@@ -1,4 +1,7 @@
 # 用途: cjt.py 的 stdlib unittest; 运行: cd scripts; py -3 -m unittest test_cjt -v
+import os
+import shutil
+import tempfile
 import unittest
 
 import cjt
@@ -183,6 +186,77 @@ class TestConvertText(unittest.TestCase):
     def test_crlf_preserved(self):
         out, n, _ = self.conv("`App/main.c:2`\r\n下一行\r\n")
         self.assertTrue(out.endswith(")\r\n下一行\r\n"))
+
+
+class TestFsResolver(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        src = os.path.join(self.root, "src")
+        os.makedirs(src)
+        with open(os.path.join(src, "u.c"), "w", encoding="utf-8", newline="") as f:
+            f.write("int a;\n// 注释A\n")
+        with open(os.path.join(src, "g.c"), "wb") as f:
+            f.write("// 中文注释\nint b;\n".encode("cp936"))
+        with open(os.path.join(src, "bad.bin"), "wb") as f:
+            f.write(b"text\x81\x00tail")           # utf-8 与 cp936 都解不了
+
+    def test_utf8_ok(self):
+        r = cjt.make_fs_resolver(self.root, None)
+        status, (rel, lines) = r("src/u.c")
+        self.assertEqual((status, rel), ("ok", "src/u.c"))
+        self.assertEqual(lines[1], "// 注释A")
+
+    def test_cp936_fallback(self):
+        r = cjt.make_fs_resolver(self.root, None)
+        status, (rel, lines) = r("src\\g.c")       # 反斜杠输入也可
+        self.assertEqual((status, rel), ("ok", "src/g.c"))
+        self.assertEqual(lines[0], "// 中文注释")
+
+    def test_encoding_override(self):
+        r = cjt.make_fs_resolver(self.root, "cp936")
+        status, (rel, lines) = r("src/g.c")
+        self.assertEqual(lines[0], "// 中文注释")
+
+    def test_abs_path_relativized(self):
+        r = cjt.make_fs_resolver(self.root, None)
+        status, (rel, _) = r(os.path.join(self.root, "src", "u.c"))
+        self.assertEqual((status, rel), ("ok", "src/u.c"))
+
+    def test_outside_root(self):
+        r = cjt.make_fs_resolver(os.path.join(self.root, "src"), None)
+        status, payload = r(os.path.join(self.root, "elsewhere.c"))
+        self.assertEqual((status, payload), ("outside-root", None))
+
+    def test_file_not_found(self):
+        r = cjt.make_fs_resolver(self.root, None)
+        self.assertEqual(r("src/nope.c"), ("file-not-found", None))
+
+    def test_decode_error(self):
+        r = cjt.make_fs_resolver(self.root, None)
+        self.assertEqual(r("src/bad.bin"), ("decode-error", None))
+
+
+class TestFindRoot(unittest.TestCase):
+    def setUp(self):
+        self.top = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.top, ignore_errors=True)
+
+    def test_git_dir(self):
+        os.makedirs(os.path.join(self.top, ".git"))
+        deep = os.path.join(self.top, "a", "b")
+        os.makedirs(deep)
+        self.assertEqual(cjt.find_root(deep), self.top)
+
+    def test_git_file_worktree(self):
+        with open(os.path.join(self.top, ".git"), "w") as f:
+            f.write("gitdir: elsewhere\n")
+        self.assertEqual(cjt.find_root(self.top), self.top)
+
+    def test_not_found(self):
+        # 临时目录的祖先是否有 .git 不受测试控制, 只验证类型契约
+        result = cjt.find_root(self.top)
+        self.assertTrue(result is None or isinstance(result, str))
 
 
 if __name__ == "__main__":

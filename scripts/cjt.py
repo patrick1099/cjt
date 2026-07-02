@@ -165,6 +165,49 @@ def convert_text(text, resolver):
     return "".join(out), converted, misses
 
 # ===== 4 Adapter: 文件系统 resolver + root 探测 =====
+def make_fs_resolver(root, encoding):
+    """真实文件系统 resolver。encoding=None 时按 SOURCE_ENCODINGS 依次尝试。"""
+    root_abs = os.path.abspath(root)
+
+    @functools.lru_cache(maxsize=256)
+    def resolver(path_str):
+        if os.path.isabs(path_str) or re.match(r"^[A-Za-z]:[\\/]", path_str):
+            full = os.path.abspath(path_str)
+        else:
+            full = os.path.abspath(os.path.join(root_abs, path_str))
+        try:
+            rel = os.path.relpath(full, root_abs)
+        except ValueError:                      # Windows 跨盘符
+            return ("outside-root", None)
+        if rel == ".." or rel.startswith(".." + os.sep):
+            return ("outside-root", None)
+        if not os.path.isfile(full):
+            return ("file-not-found", None)
+        with open(full, "rb") as f:
+            data = f.read()
+        for enc in ((encoding,) if encoding else SOURCE_ENCODINGS):
+            try:
+                text = data.decode(enc)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        else:
+            return ("decode-error", None)
+        return ("ok", (rel.replace("\\", "/"), text.splitlines()))
+
+    return resolver
+
+
+def find_root(start):
+    """从 start 向上找 .git(目录或文件, 兼容 worktree); 找不到返回 None。"""
+    d = os.path.abspath(start)
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
 
 # ===== 5 App: 命令表 + CLI 入口 =====
 
