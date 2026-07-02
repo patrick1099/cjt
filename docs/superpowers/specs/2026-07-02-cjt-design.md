@@ -113,8 +113,12 @@ py -3 cjt.py link <path:line[-end]> [LABEL] [--root DIR] [--encoding ENC] [--for
   那是 AI 写引用最常用的形式。
 - 目标已是 `vscode://` 的链接跳过 → **幂等**，重复 convert 无副作用。
 - **最终安全闸门：文件必须真实存在且行号 ≤ 文件行数**。候选引用先按
-  root 解析路径，文件不存在或行号越界 → 原文保留 + 进 misses。
-  `12:30`、`http://x:80` 之类的误匹配因此天然不可能被转换。
+  root 解析路径，解析失败 → 原文保留。`12:30`、`http://x:80` 之类的
+  误匹配因此天然不可能被转换（URL scheme 直接不算候选）。
+- **强/弱候选与 miss 报告**：路径含目录分隔符（`/` 或 `\`）= 强候选，
+  解析失败进 misses（AI 引用几乎总是目录限定的，值得报告修正）；
+  无分隔符（`main.c:12`、`12:30`、`v1.2:3`）= 弱候选，文件存在才转换，
+  不存在则**静默保留、不报 miss**（避免版本号/时间等误匹配刷屏）。
 - 绝对路径引用自动相对化到 root；root 之外的文件 → 原文保留 + miss
   （reason: `outside-root`）。
 
@@ -135,8 +139,10 @@ py -3 cjt.py link <path:line[-end]> [LABEL] [--root DIR] [--encoding ENC] [--for
   Python `re.escape`——其转义集不同，会破坏字节级一致）。
 - 目标行为空白行 → 不带 `pattern` 参数（与扩展 `linePattern()` 返回
   undefined 的行为一致）。
-- URL 编码用 `urllib.parse.urlencode`（空格→`+`，与 JS
-  `URLSearchParams.toString()` 一致）。
+- URL 编码**手写 WHATWG form 序列化器**（与 JS `URLSearchParams.toString()`
+  字节级一致：保留 `A-Za-z0-9` 和 `*-._`，空格→`+`，其余按 UTF-8 逐字节
+  `%XX` 大写转义）。不用 `urllib.parse.urlencode`——Python 与 JS 在 `*`
+  （JS 保留/Py 转义）和 `~`（JS 转义/Py 保留）上不一致，金样对拍会挂。
 - **源文件编码**：先按 UTF-8 严格解码，失败回退 CP936（固件仓库为
   GB2312），`--encoding` 可显式覆盖。pattern 中的中文注释必须正确解码
   为 Unicode 才能与 VS Code 侧匹配。文档本身固定按 UTF-8 读写。
