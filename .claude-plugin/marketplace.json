@@ -1,0 +1,14 @@
+{
+  "name": "cjt",
+  "owner": { "name": "xu" },
+  "metadata": {
+    "description": "Code Jump Tags 跳转链接生成 CLI"
+  },
+  "plugins": [
+    {
+      "name": "cjt",
+      "source": ".",
+      "description": "markdown 中的 path:line 引用批量转 vscode:// 跳转链接(Code Jump Tags), 支持 Obsidian"
+    }
+  ]
+}
