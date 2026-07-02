@@ -11,7 +11,7 @@
 
 ```
 py -3 scripts/cjt.py convert 教程.md [--root DIR] [--dry-run] [--encoding ENC] [--format json|text]
-py -3 scripts/cjt.py link App/Code/main.c:123 [标签] [--root DIR] [--format json|text]
+py -3 scripts/cjt.py link App/Code/main.c:123 [标签] [--root DIR] [--encoding ENC] [--format json|text]
 ```
 
 - `convert`：原地转换整篇文档。识别 `` `path:line` ``、裸 `path:line`、

@@ -10,6 +10,7 @@ description: Convert plain path:line code references in a markdown document into
 - `` `App/Code/main.c:123` ``（行内代码，最常用）
 - `App/Code/main.c:123` 裸文本 / `App/Code/main.c:123-145` 行区间
 - `[自定义标签](App/Code/main.c:123)`
+- 裸引用与中文文字之间要留空格（或用行内代码包起来），否则路径会被误粘连
 
 围栏代码块内的引用不会被转换；已是 `vscode://` 的链接不会二次转换（幂等）。
 

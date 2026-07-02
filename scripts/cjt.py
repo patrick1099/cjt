@@ -44,7 +44,7 @@ COMBINED_RE = re.compile(
     r"\[(?P<label>[^\]\n]*)\]\((?P<target>[^)\s]+)\)"
     r"|`(?P<code>[^`\n]+)`"
     r"|" + _ref_core("b"))
-FENCE_RE = re.compile(r"[ ]{0,3}(```|~~~)")
+FENCE_RE = re.compile(r"[ ]{0,3}(`{3,}|~{3,})")
 
 
 def parse_ref(s):
@@ -154,7 +154,7 @@ def convert_text(text, resolver):
             out.append(raw)
             continue
         if fence is not None:
-            if m and m.group(1) == fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
                 fence = None
             out.append(raw)
             continue
@@ -234,8 +234,17 @@ def cmd_convert(args):
     resolver = make_fs_resolver(root, args.encoding)
     new_text, converted, misses = convert_text(text, resolver)
     if not args.dry_run and new_text != text:
-        with open(args.doc, "w", encoding="utf-8", newline="") as f:
-            f.write(new_text)
+        tmp = args.doc + ".cjt-tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8", newline="") as f:
+                f.write(new_text)
+            os.replace(tmp, args.doc)
+        except OSError as e:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            _die("写入失败: %s" % e)
     report = {
         "doc": args.doc,
         "root": os.path.abspath(root).replace("\\", "/"),

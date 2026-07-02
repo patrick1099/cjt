@@ -137,6 +137,12 @@ class TestConvertText(unittest.TestCase):
         self.assertEqual(out, text)
         self.assertEqual((n, misses), (0, []))
 
+    def test_four_backtick_fence_not_closed_by_triple(self):
+        text = "````\n```\nApp/main.c:2\n````\n"
+        out, n, misses = self.conv(text)
+        self.assertEqual(out, text)
+        self.assertEqual((n, misses), (0, []))
+
     def test_idempotent(self):
         once, n1, _ = self.conv("`App/main.c:2`\n")
         twice, n2, misses = self.conv(once)
@@ -308,6 +314,23 @@ class TestCli(unittest.TestCase):
                                 "--dry-run", "--format", "json")
         self.assertEqual(code, 0)
         self.assertTrue(json.loads(out)["dry_run"])
+        self.assertEqual(self.read_doc(), before)
+
+    def test_convert_failed_write_leaves_original(self):
+        before = self.read_doc()
+        real_replace = os.replace
+
+        def boom(*a, **kw):
+            raise OSError("模拟写入失败")
+
+        os.replace = boom
+        try:
+            code, _, err = _run_cli("convert", self.doc, "--root", self.root,
+                                    "--format", "json")
+        finally:
+            os.replace = real_replace
+        self.assertEqual(code, 1)
+        self.assertIn("写入失败", err)
         self.assertEqual(self.read_doc(), before)
 
     def test_convert_missing_doc_exits_1(self):
