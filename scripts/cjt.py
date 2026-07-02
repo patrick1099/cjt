@@ -94,6 +94,76 @@ def build_url(rel_path, line, line_text):
     query = "&".join(k + "=" + form_quote(v) for k, v in pairs)
     return "vscode://" + EXTENSION_ID + "/goto?" + query
 
+
+def _render_ref(ref, label, lineno, resolver):
+    """解析并渲染一个引用 -> (替换文本|None, miss|None)。弱候选失败双 None。"""
+    status, payload = resolver(ref.path)
+    if status == "ok":
+        rel, src_lines = payload
+        if ref.line <= len(src_lines):
+            url = build_url(rel, ref.line, src_lines[ref.line - 1])
+            return "[" + label + "](" + url + ")", None
+        status = "line-out-of-range"
+    if not ref.strong:
+        return None, None
+    return None, {"ref": ref.raw, "line_in_doc": lineno, "reason": status}
+
+
+def _convert_line(line, lineno, resolver):
+    out, last, converted, misses = [], 0, 0, []
+    for m in COMBINED_RE.finditer(line):
+        repl = None
+        if m.group("label") is not None:            # [label](target)
+            target = m.group("target")
+            ref = None if _SCHEME_RE.match(target) else parse_ref(target)
+            if ref:
+                repl, miss = _render_ref(ref, m.group("label"), lineno, resolver)
+                if miss:
+                    misses.append(miss)
+        elif m.group("code") is not None:           # `code`
+            ref = parse_ref(m.group("code").strip())
+            if ref:
+                repl, miss = _render_ref(ref, "`" + m.group("code") + "`",
+                                         lineno, resolver)
+                if miss:
+                    misses.append(miss)
+        else:                                       # 裸引用
+            ref = parse_ref(m.group(0))
+            if ref:
+                repl, miss = _render_ref(ref, m.group(0), lineno, resolver)
+                if miss:
+                    misses.append(miss)
+        if repl is not None:
+            out.append(line[last:m.start()])
+            out.append(repl)
+            last = m.end()
+            converted += 1
+    out.append(line[last:])
+    return "".join(out), converted, misses
+
+
+def convert_text(text, resolver):
+    """全文转换。围栏代码块内不动; 返回 (新全文, 转换数, misses)。"""
+    lines = text.splitlines(keepends=True)
+    out, converted, misses = [], 0, []
+    fence = None
+    for lineno, raw in enumerate(lines, 1):
+        m = FENCE_RE.match(raw)
+        if m and fence is None:
+            fence = m.group(1)
+            out.append(raw)
+            continue
+        if fence is not None:
+            if m and m.group(1) == fence:
+                fence = None
+            out.append(raw)
+            continue
+        new, c, ms = _convert_line(raw, lineno, resolver)
+        out.append(new)
+        converted += c
+        misses.extend(ms)
+    return "".join(out), converted, misses
+
 # ===== 4 Adapter: 文件系统 resolver + root 探测 =====
 
 # ===== 5 App: 命令表 + CLI 入口 =====

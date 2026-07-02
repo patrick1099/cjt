@@ -77,5 +77,113 @@ class TestBuildUrl(unittest.TestCase):
                          "vscode://patrick1099.code-jump-tags/goto?file=a.c&line=5")
 
 
+def _mock_resolver(files):
+    """files: {rel_posix: [行...]}; 模拟 Port, 测试专用。"""
+    def r(path):
+        key = path.replace("\\", "/")
+        if key.startswith("OUT/"):
+            return ("outside-root", None)
+        if key not in files:
+            return ("file-not-found", None)
+        return ("ok", (key, files[key]))
+    return r
+
+
+FILES = {
+    "App/main.c": ["#include <a.h>", "int main(void)", "{", "    return 0;", "}"],
+    "Makefile": ["all: build"],
+}
+
+
+class TestConvertText(unittest.TestCase):
+    def conv(self, text):
+        return cjt.convert_text(text, _mock_resolver(FILES))
+
+    def url(self, rel, line):
+        return cjt.build_url(rel, line, FILES[rel][line - 1])
+
+    def test_bare(self):
+        out, n, misses = self.conv("見 App/main.c:2 一行\n")
+        self.assertEqual(out, "見 [App/main.c:2](%s) 一行\n" % self.url("App/main.c", 2))
+        self.assertEqual((n, misses), (1, []))
+
+    def test_inline_code(self):
+        out, n, _ = self.conv("看 `App/main.c:2` 这里\n")
+        self.assertEqual(out, "看 [`App/main.c:2`](%s) 这里\n" % self.url("App/main.c", 2))
+        self.assertEqual(n, 1)
+
+    def test_md_link_label_kept(self):
+        out, n, _ = self.conv("[主循环入口](App/main.c:2)\n")
+        self.assertEqual(out, "[主循环入口](%s)\n" % self.url("App/main.c", 2))
+        self.assertEqual(n, 1)
+
+    def test_range_jumps_to_start_label_keeps_range(self):
+        out, n, _ = self.conv("`App/main.c:2-4`\n")
+        self.assertEqual(out, "[`App/main.c:2-4`](%s)\n" % self.url("App/main.c", 2))
+
+    def test_backslash_path(self):
+        out, n, _ = self.conv("App\\main.c:2\n")
+        self.assertEqual(out, "[App\\main.c:2](%s)\n" % self.url("App/main.c", 2))
+
+    def test_fenced_block_skipped(self):
+        text = "```c\nApp/main.c:2\n```\n~~~\n`App/main.c:2`\n~~~\n"
+        out, n, misses = self.conv(text)
+        self.assertEqual(out, text)
+        self.assertEqual((n, misses), (0, []))
+
+    def test_idempotent(self):
+        once, n1, _ = self.conv("`App/main.c:2`\n")
+        twice, n2, misses = self.conv(once)
+        self.assertEqual(twice, once)
+        self.assertEqual((n2, misses), (0, []))
+
+    def test_strong_miss_reported(self):
+        text = "坏引用 App/gone.c:9 在此\n第二行 OUT/x.c:1\n"
+        out, n, misses = self.conv(text)
+        self.assertEqual(out, text)                      # 原文保留
+        self.assertEqual(n, 0)
+        self.assertEqual(misses, [
+            {"ref": "App/gone.c:9", "line_in_doc": 1, "reason": "file-not-found"},
+            {"ref": "OUT/x.c:1", "line_in_doc": 2, "reason": "outside-root"},
+        ])
+
+    def test_line_out_of_range_miss(self):
+        out, n, misses = self.conv("`App/main.c:99`\n")
+        self.assertEqual(n, 0)
+        self.assertEqual(misses[0]["reason"], "line-out-of-range")
+        self.assertEqual(misses[0]["ref"], "App/main.c:99")
+
+    def test_weak_nonexistent_silent(self):
+        text = "时间 12:30, 版本 v1.2:3, 比例 4:5\n"
+        out, n, misses = self.conv(text)
+        self.assertEqual(out, text)
+        self.assertEqual((n, misses), (0, []))           # 弱候选不报 miss
+
+    def test_weak_existing_converted(self):
+        out, n, _ = self.conv("Makefile:1\n")
+        self.assertEqual(out, "[Makefile:1](%s)\n" % self.url("Makefile", 1))
+
+    def test_url_with_port_untouched(self):
+        text = "http://x:80/a 和 https://e.com:443\n"
+        out, n, misses = self.conv(text)
+        self.assertEqual(out, text)
+        self.assertEqual((n, misses), (0, []))
+
+    def test_multiple_refs_one_line(self):
+        out, n, _ = self.conv("`App/main.c:1` 与 App/main.c:3\n")
+        self.assertEqual(n, 2)
+        self.assertIn("[`App/main.c:1`](", out)
+        self.assertIn("[App/main.c:3](", out)
+
+    def test_blank_source_line_no_pattern(self):
+        files = {"a/b.c": ["int x;", "   "]}
+        out, n, _ = cjt.convert_text("`a/b.c:2`\n", _mock_resolver(files))
+        self.assertIn("goto?file=a%2Fb.c&line=2)", out)  # 无 pattern 参数
+
+    def test_crlf_preserved(self):
+        out, n, _ = self.conv("`App/main.c:2`\r\n下一行\r\n")
+        self.assertTrue(out.endswith(")\r\n下一行\r\n"))
+
+
 if __name__ == "__main__":
     unittest.main()
