@@ -10,8 +10,9 @@
 ## 用法
 
 ```
-py -3 scripts/cjt.py convert 教程.md [--root DIR] [--dry-run] [--encoding ENC] [--format json|text]
-py -3 scripts/cjt.py link App/Code/main.c:123 [标签] [--root DIR] [--encoding ENC] [--format json|text]
+py -3 scripts/cjt.py convert 教程.md [--tags] [--name 名称] [--root DIR] [--dry-run] [--encoding ENC] [--format json|text]
+py -3 scripts/cjt.py tags 教程.md [--name 名称] [--root DIR] [--format json|text]
+py -3 scripts/cjt.py link App/Code/main.c:123 [标签] [--tags] [--root DIR] [--encoding ENC] [--format json|text]
 ```
 
 - `convert`：原地转换整篇文档。识别 `` `path:line` ``、裸 `path:line`、
@@ -19,6 +20,10 @@ py -3 scripts/cjt.py link App/Code/main.c:123 [标签] [--root DIR] [--encoding 
   引用必须真实存在（文件存在且行号在范围内）才转换，否则原文保留并计入
   misses 报告（无目录分隔符的弱候选静默跳过，避免 `12:30` 这类误报）。
 - `link`：生成单条链接。
+- `--tags` / `tags`：把文档中的跳转点同步写入 `.code-jump-tags/store.json`，
+  扩展侧边栏按文档分组显示（folder 标题用 `--name`，缺省文档相对路径）。
+  重跑全量同步：新增/更新/移除以文档为准，既有标签保留 id 与创建时间。
+  `link --tags` 单条进「未分组」收件箱。
 - `--root` 缺省从当前目录向上找 `.git`（兼容 worktree）。文档在仓库外
   （如 Obsidian vault）时显式指定。
 - 源文件解码：UTF-8 失败回退 CP936（GB2312 代码仓库友好）。
@@ -39,6 +44,11 @@ convert，AI 无需手工拼 URL、零额外 token。安装：
 - 点击链接时，VS Code 打开的**第一个**工作区文件夹必须是链接路径的根
   （扩展按 `workspaceFolders[0]` 解析相对路径）。
 - 目标行被彻底改写/删除后，跳转退化为按行号定位（扩展既有行为）。
+- `--tags` 实时刷新侧边栏需扩展 ≥ 0.8.0（store 文件 watcher）。旧版扩展下
+  写入仍生效但需 Reload Window，且此后扩展内的标签操作会以旧缓存覆盖
+  CLI 写入——请配套升级。
+- 扩展保存恰好落在 CLI 读-写窗口内的并发修改可能被覆盖（毫秒级窗口，
+  已用 mtime 复核 + 一次重试收窄）。
 
 ## 兼容性承诺
 

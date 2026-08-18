@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "cjt",
   "displayName": "Code Jump Tags CLI",
-  "version": "0.1.0",
-  "description": "把 markdown 文档中的 path:line 代码引用批量转换为 Code Jump Tags 扩展的 vscode:// 跳转链接(带漂移恢复 pattern), VS Code 与 Obsidian 中均可点击跳转。AI 写教程/报告后跑一次 convert 即可, 无感、零额外 token。",
+  "version": "0.2.0",
+  "description": "把 markdown 文档中的 path:line 代码引用批量转换为 Code Jump Tags 扩展的 vscode:// 跳转链接(带漂移恢复 pattern), VS Code 与 Obsidian 中均可点击跳转; 可同步写入 .code-jump-tags/store.json 使扩展侧边栏按文档分组显示标签。AI 写教程/报告后跑一次 convert(或 tags)即可, 无感、零额外 token。",
   "author": { "name": "xu" },
   "keywords": ["code-jump-tags", "vscode", "markdown", "deep-link", "obsidian"]
 }

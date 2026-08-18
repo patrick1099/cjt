@@ -362,5 +362,382 @@ class TestCli(unittest.TestCase):
         self.assertIn("line-out-of-range", err)
 
 
+def _fake_id_gen():
+    n = [0]
+    def gen(prefix):
+        n[0] += 1
+        return "%s_test%d" % (prefix, n[0])
+    return gen
+
+
+FAKE_NOW = lambda: "2026-07-02T00:00:00.000Z"
+
+
+def _ref(file, line, note="n", pattern="auto"):
+    if pattern == "auto":
+        pattern = "^[^\\S\\n]*line%d" % line
+    return {"note": note, "file": file, "line": line, "pattern": pattern}
+
+
+class TestExtractGotoRefs(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.URL2 = cjt.build_url("App/main.c", 2, "int main(void)")
+
+    def test_basic_extract_and_decode(self):
+        refs = cjt.extract_goto_refs("[主循环](%s)\n" % self.URL2)
+        self.assertEqual(refs, [{
+            "note": "主循环", "file": "App/main.c", "line": 2,
+            "pattern": "^[^\\S\\n]*int main\\(void\\)"}])
+
+    def test_chinese_and_space_decode(self):
+        url = cjt.build_url("docs/需求.md", 1, "  a b 中文  ")
+        refs = cjt.extract_goto_refs("[x](%s)\n" % url)
+        self.assertEqual(refs[0]["pattern"], "^[^\\S\\n]*a b 中文")
+        self.assertEqual(refs[0]["file"], "docs/需求.md")
+
+    def test_no_pattern_link(self):
+        url = cjt.build_url("a.c", 5, "   ")   # 空白行无 pattern
+        refs = cjt.extract_goto_refs("[x](%s)\n" % url)
+        self.assertEqual(refs[0]["pattern"], None)
+
+    def test_fence_skipped(self):
+        text = "```\n[x](%s)\n```\n" % self.URL2
+        self.assertEqual(cjt.extract_goto_refs(text), [])
+
+    def test_foreign_links_ignored(self):
+        text = ("[a](vscode://other.ext/goto?file=x&line=1)\n"
+                "[b](https://e.com/x)\n"
+                "[c](vscode://patrick1099.code-jump-tags/other?file=x&line=1)\n")
+        self.assertEqual(cjt.extract_goto_refs(text), [])
+
+    def test_dedupe_first_label_wins(self):
+        text = "[甲](%s)\n[乙](%s)\n" % (self.URL2, self.URL2)
+        refs = cjt.extract_goto_refs(text)
+        self.assertEqual(len(refs), 1)
+        self.assertEqual(refs[0]["note"], "甲")
+
+    def test_order_preserved(self):
+        u1 = cjt.build_url("a.c", 1, "x1")
+        u3 = cjt.build_url("a.c", 3, "x3")
+        refs = cjt.extract_goto_refs("[一](%s) 然后 [三](%s)\n" % (u1, u3))
+        self.assertEqual([r["line"] for r in refs], [1, 3])
+
+    def test_bad_line_ignored(self):
+        text = "[x](vscode://patrick1099.code-jump-tags/goto?file=a.c&line=abc)\n"
+        self.assertEqual(cjt.extract_goto_refs(text), [])
+
+
+class TestPatternToText(unittest.TestCase):
+    def test_roundtrip_with_line_pattern(self):
+        for line in ["int x;", "if (a*b) { /* hi */ }", "  你好 world  "]:
+            self.assertEqual(cjt.pattern_to_text(cjt.line_pattern(line)),
+                             line.strip())
+
+    def test_non_matching_prefix(self):
+        self.assertIsNone(cjt.pattern_to_text("no-prefix"))
+        self.assertIsNone(cjt.pattern_to_text(None))
+
+
+class TestSyncDocFolder(unittest.TestCase):
+    def test_first_create_at_root_end(self):
+        store = {"version": 1, "tree": [{"type": "folder", "id": "f_x",
+                                         "title": "已有", "children": []}]}
+        rep = cjt.sync_doc_folder(store, "docs/a.md", "教程",
+                                  [_ref("a.c", 1, "甲")], _fake_id_gen(), FAKE_NOW)
+        self.assertEqual(rep, {"folder": "教程", "added": 1,
+                               "updated": 0, "removed": 0})
+        folder = store["tree"][-1]                  # 根级末尾, 不挤 inbox 顶部位
+        self.assertEqual((folder["type"], folder["title"], folder["source"]),
+                         ("folder", "教程", "docs/a.md"))
+        tag = folder["children"][0]
+        self.assertEqual((tag["type"], tag["note"], tag["file"], tag["line"]),
+                         ("tag", "甲", "a.c", 1))
+        self.assertEqual(tag["text"], "line1")      # pattern 反解
+        self.assertEqual(tag["original"], "line1")
+        self.assertEqual(tag["createdAt"], "2026-07-02T00:00:00.000Z")
+
+    def test_resync_add_update_remove_keep_identity(self):
+        store = {"version": 1, "tree": []}
+        gen = _fake_id_gen()
+        cjt.sync_doc_folder(store, "d.md", "d.md",
+                            [_ref("a.c", 1, "旧名"), _ref("a.c", 2)], gen, FAKE_NOW)
+        folder = store["tree"][0]
+        keep_id = folder["children"][0]["id"]
+        keep_created = folder["children"][0]["createdAt"]
+        rep = cjt.sync_doc_folder(store, "d.md", "d.md",
+                                  [_ref("a.c", 1, "新名"), _ref("b.c", 9)],
+                                  gen, lambda: "2027-01-01T00:00:00.000Z")
+        self.assertEqual(rep, {"folder": "d.md", "added": 1,
+                               "updated": 1, "removed": 1})
+        kept = folder["children"][0]
+        self.assertEqual((kept["id"], kept["createdAt"], kept["note"]),
+                         (keep_id, keep_created, "新名"))       # id/createdAt 保持
+        self.assertEqual(folder["children"][1]["file"], "b.c")  # 顺序 = 文档序
+
+    def test_rename_keeps_identity(self):
+        store = {"version": 1, "tree": []}
+        gen = _fake_id_gen()
+        cjt.sync_doc_folder(store, "d.md", "d.md", [_ref("a.c", 1)], gen, FAKE_NOW)
+        fid = store["tree"][0]["id"]
+        cjt.sync_doc_folder(store, "d.md", "新标题", [_ref("a.c", 1)], gen, FAKE_NOW)
+        self.assertEqual(len(store["tree"]), 1)                 # 没新建 folder
+        self.assertEqual((store["tree"][0]["id"], store["tree"][0]["title"]),
+                         (fid, "新标题"))
+
+    def test_non_tag_children_preserved(self):
+        store = {"version": 1, "tree": [{
+            "type": "folder", "id": "f_1", "title": "d.md", "source": "d.md",
+            "children": [{"type": "folder", "id": "f_sub", "title": "手工子夹",
+                          "children": []}]}]}
+        cjt.sync_doc_folder(store, "d.md", "d.md", [_ref("a.c", 1)],
+                            _fake_id_gen(), FAKE_NOW)
+        kinds = [c["type"] for c in store["tree"][0]["children"]]
+        self.assertEqual(kinds, ["tag", "folder"])              # tag 前, 非 tag 保留在后
+
+    def test_no_pattern_ref_omits_anchor_fields(self):
+        store = {"version": 1, "tree": []}
+        cjt.sync_doc_folder(store, "d.md", "d.md",
+                            [_ref("a.c", 5, pattern=None)], _fake_id_gen(), FAKE_NOW)
+        tag = store["tree"][0]["children"][0]
+        self.assertNotIn("pattern", tag)
+        self.assertNotIn("text", tag)
+        self.assertNotIn("original", tag)
+
+
+class TestUpsertInboxTag(unittest.TestCase):
+    def test_lazy_create_inbox_at_top(self):
+        store = {"version": 1, "tree": [{"type": "folder", "id": "f_x",
+                                         "title": "别的", "children": []}]}
+        action = cjt.upsert_inbox_tag(store, _ref("a.c", 1), _fake_id_gen(), FAKE_NOW)
+        self.assertEqual(action, "added")
+        inbox = store["tree"][0]                    # 顶部
+        self.assertEqual((inbox["title"], inbox["inbox"]), ("未分组", True))
+        self.assertEqual(inbox["children"][0]["file"], "a.c")
+
+    def test_reuse_existing_inbox(self):
+        store = {"version": 1, "tree": [{"type": "folder", "id": "f_i",
+                                         "title": "未分组", "inbox": True,
+                                         "children": []}]}
+        cjt.upsert_inbox_tag(store, _ref("a.c", 1), _fake_id_gen(), FAKE_NOW)
+        self.assertEqual(len(store["tree"]), 1)
+
+    def test_existing_location_updates_anywhere(self):
+        store = {"version": 1, "tree": [{
+            "type": "folder", "id": "f_1", "title": "夹", "children": [
+                {"type": "tag", "id": "t_old", "note": "旧", "file": "a.c",
+                 "line": 1, "createdAt": "x"}]}]}
+        action = cjt.upsert_inbox_tag(store, _ref("a.c", 1, "新"),
+                                      _fake_id_gen(), FAKE_NOW)
+        self.assertEqual(action, "updated")
+        self.assertEqual(store["tree"][0]["children"][0]["note"], "新")
+        self.assertEqual(len(store["tree"]), 1)     # 没建 inbox
+
+
+class TestSerializeStore(unittest.TestCase):
+    def test_matches_js_stringify(self):
+        store = {"version": 1, "tree": [{"type": "folder", "id": "f_1",
+                                         "title": "文档", "children": []}]}
+        expected = (
+            '{\n'
+            '  "version": 1,\n'
+            '  "tree": [\n'
+            '    {\n'
+            '      "type": "folder",\n'
+            '      "id": "f_1",\n'
+            '      "title": "文档",\n'
+            '      "children": []\n'
+            '    }\n'
+            '  ]\n'
+            '}')
+        self.assertEqual(cjt.serialize_store(store), expected)
+
+    def test_no_unicode_escape_no_trailing_newline(self):
+        out = cjt.serialize_store({"version": 1, "tree": []})
+        self.assertFalse(out.endswith("\n"))
+        out2 = cjt.serialize_store({"version": 1, "tree": [
+            {"type": "folder", "id": "f", "title": "中文", "children": []}]})
+        self.assertIn('"中文"', out2)
+        self.assertNotIn("\\u", out2)
+
+
+class TestBase36(unittest.TestCase):
+    def test_values(self):
+        self.assertEqual(cjt.base36(0), "0")
+        self.assertEqual(cjt.base36(35), "z")
+        self.assertEqual(cjt.base36(36), "10")
+        # 金样已用 node -e "console.log((1751414400000).toString(36))" 验证
+        self.assertEqual(cjt.base36(1751414400000), "mcl6ww00")
+
+
+class TestStoreIO(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.path = os.path.join(self.root, ".code-jump-tags", "store.json")
+
+    def test_missing_returns_empty(self):
+        store, mtime = cjt.load_store(self.root)
+        self.assertEqual(store, {"version": 1, "tree": []})
+        self.assertIsNone(mtime)
+
+    def test_roundtrip_creates_dir(self):
+        store, mtime = cjt.load_store(self.root)
+        store["tree"].append({"type": "folder", "id": "f_1", "title": "中文",
+                              "children": []})
+        self.assertTrue(cjt.save_store(self.root, store, mtime))
+        back, mtime2 = cjt.load_store(self.root)
+        self.assertEqual(back, store)
+        self.assertIsNotNone(mtime2)
+        with open(self.path, "rb") as f:
+            self.assertNotIn(b"\\u", f.read())      # ensure_ascii=False 落盘
+
+    def test_corrupt_raises(self):
+        os.makedirs(os.path.dirname(self.path))
+        for bad in ("{not json", '{"version": 2, "tree": []}',
+                    '{"version": 1, "tree": "x"}'):
+            with open(self.path, "w", encoding="utf-8") as f:
+                f.write(bad)
+            with self.assertRaises(cjt.StoreCorruptError):
+                cjt.load_store(self.root)
+
+    def test_mtime_mismatch_refuses(self):
+        store, mtime = cjt.load_store(self.root)
+        cjt.save_store(self.root, store, mtime)          # 建出文件
+        store2, mtime2 = cjt.load_store(self.root)
+        os.utime(self.path, (mtime2 + 10, mtime2 + 10))  # 模拟并发写
+        self.assertFalse(cjt.save_store(self.root, store2, mtime2))
+
+
+class TestIdAndTime(unittest.TestCase):
+    def test_id_format(self):
+        self.assertRegex(cjt.new_node_id("t"), r"^t_[0-9a-z]+_[0-9a-z]{4}$")
+        self.assertRegex(cjt.new_node_id("f"), r"^f_[0-9a-z]+_[0-9a-z]{4}$")
+
+    def test_iso_z_format(self):
+        self.assertRegex(cjt.now_iso_z(),
+                         r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+
+
+class TestCliTags(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        os.makedirs(os.path.join(self.root, "src"))
+        with open(os.path.join(self.root, "src", "a.c"), "w",
+                  encoding="utf-8", newline="") as f:
+            f.write("int x;\nint y;\nint z;\n")
+        self.doc = os.path.join(self.root, "doc.md")
+        with open(self.doc, "w", encoding="utf-8", newline="") as f:
+            f.write("见 `src/a.c:2` 与 `src/a.c:3`\n")
+        self.store_path = os.path.join(self.root, ".code-jump-tags",
+                                       "store.json")
+
+    def read_store(self):
+        with open(self.store_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_convert_with_tags(self):
+        code, out, _ = _run_cli("convert", self.doc, "--root", self.root,
+                                "--tags", "--name", "冒烟教程",
+                                "--format", "json")
+        self.assertEqual(code, 0)
+        rep = json.loads(out)
+        self.assertEqual(rep["tags"], {"folder": "冒烟教程", "added": 2,
+                                       "updated": 0, "removed": 0})
+        store = self.read_store()
+        folder = store["tree"][-1]
+        self.assertEqual((folder["title"], folder["source"]),
+                         ("冒烟教程", "doc.md"))
+        self.assertEqual([(t["file"], t["line"]) for t in folder["children"]],
+                         [("src/a.c", 2), ("src/a.c", 3)])
+        self.assertEqual(folder["children"][0]["text"], "int y;")
+
+    def test_convert_without_tags_untouched(self):
+        code, out, _ = _run_cli("convert", self.doc, "--root", self.root,
+                                "--format", "json")
+        self.assertEqual(code, 0)
+        self.assertNotIn("tags", json.loads(out))
+        self.assertFalse(os.path.exists(self.store_path))
+
+    def test_dry_run_skips_store(self):
+        code, out, _ = _run_cli("convert", self.doc, "--root", self.root,
+                                "--tags", "--dry-run", "--format", "json")
+        self.assertEqual(code, 0)
+        self.assertNotIn("tags", json.loads(out))
+        self.assertFalse(os.path.exists(self.store_path))
+
+    def test_tags_subcommand_rerun_sync(self):
+        _run_cli("convert", self.doc, "--root", self.root)      # 先转换
+        code, out, _ = _run_cli("tags", self.doc, "--root", self.root,
+                                "--format", "json")
+        self.assertEqual(code, 0)
+        rep = json.loads(out)
+        self.assertEqual(rep["tags"]["added"], 2)
+        self.assertEqual(rep["tags"]["folder"], "doc.md")       # 缺省标题=source
+        store = self.read_store()
+        keep_id = store["tree"][-1]["children"][0]["id"]
+        # 文档删掉第二条引用后重跑 -> removed=1, 首条 id 保持
+        with open(self.doc, "r", encoding="utf-8", newline="") as f:
+            text = f.read()
+        head, _, _ = text.partition(" 与 ")
+        with open(self.doc, "w", encoding="utf-8", newline="") as f:
+            f.write(head + "\n")
+        code, out, _ = _run_cli("tags", self.doc, "--root", self.root,
+                                "--format", "json")
+        rep = json.loads(out)
+        self.assertEqual((rep["tags"]["added"], rep["tags"]["removed"]), (0, 1))
+        store = self.read_store()
+        self.assertEqual(len(store["tree"][-1]["children"]), 1)
+        self.assertEqual(store["tree"][-1]["children"][0]["id"], keep_id)
+
+    def test_tags_no_links_ok(self):
+        plain = os.path.join(self.root, "plain.md")
+        with open(plain, "w", encoding="utf-8", newline="") as f:
+            f.write("没有链接\n")
+        code, out, _ = _run_cli("tags", plain, "--root", self.root,
+                                "--format", "json")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["tags"],
+                         {"folder": "plain.md", "added": 0,
+                          "updated": 0, "removed": 0})
+
+    def test_link_tags_inbox_then_update(self):
+        code, out, _ = _run_cli("link", "src/a.c:2", "第二行", "--root",
+                                self.root, "--tags", "--format", "json")
+        self.assertEqual(code, 0)
+        rep = json.loads(out)
+        self.assertEqual(rep["tag"], {"action": "added", "folder": "未分组"})
+        store = self.read_store()
+        self.assertEqual((store["tree"][0]["title"], store["tree"][0]["inbox"]),
+                         ("未分组", True))
+        self.assertEqual(store["tree"][0]["children"][0]["note"], "第二行")
+        code, out, _ = _run_cli("link", "src/a.c:2", "改名", "--root",
+                                self.root, "--tags", "--format", "json")
+        rep = json.loads(out)
+        self.assertEqual(rep["tag"], {"action": "updated"})
+        store = self.read_store()
+        self.assertEqual(len(store["tree"][0]["children"]), 1)
+        self.assertEqual(store["tree"][0]["children"][0]["note"], "改名")
+
+    def test_link_tags_default_note_plain_ref(self):
+        code, out, _ = _run_cli("link", "src/a.c:2", "--root", self.root,
+                                "--tags", "--format", "json")
+        self.assertEqual(code, 0)
+        store = self.read_store()
+        self.assertEqual(store["tree"][0]["children"][0]["note"], "src/a.c:2")
+        # note 不带反引号(反引号是 markdown 样式不是标签名)
+
+    def test_corrupt_store_refused_untouched(self):
+        os.makedirs(os.path.dirname(self.store_path))
+        with open(self.store_path, "w", encoding="utf-8") as f:
+            f.write("{broken")
+        code, _, err = _run_cli("tags", self.doc, "--root", self.root)
+        self.assertEqual(code, 1)
+        self.assertIn("store", err)
+        with open(self.store_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "{broken")               # 原文件未动
+
+
 if __name__ == "__main__":
     unittest.main()
