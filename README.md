@@ -24,6 +24,8 @@ py -3 scripts/cjt.py link App/Code/main.c:123 [标签] [--tags] [--root DIR] [--
   扩展侧边栏按文档分组显示（folder 标题用 `--name`，缺省文档相对路径）。
   重跑全量同步：新增/更新/移除以文档为准，既有标签保留 id 与创建时间。
   `link --tags` 单条进「未分组」收件箱。
+  只出一层平铺文件夹；要按任意层级分类（如代码链路追踪），用扩展 0.9.0+ 自带的
+  `cjtag import`（`dist/cli.js`，`folder` 用 `/` 分层），skill 里有完整流程。
 - `--root` 缺省从当前目录向上找 `.git`（兼容 worktree）。文档在仓库外
   （如 Obsidian vault）时显式指定。
 - 源文件解码：UTF-8 失败回退 CP936（GB2312 代码仓库友好）。
