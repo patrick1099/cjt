@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "cjt",
   "displayName": "Code Jump Tags CLI",
-  "version": "0.4.2",
-  "description": "把 markdown 文档中的 path:line 代码引用批量转换为 Code Jump Tags 扩展的 vscode:// 跳转链接(带漂移恢复 pattern), VS Code 与 Obsidian 中均可点击跳转; 可同步写入 .code-jump-tags/store.json 使扩展侧边栏按文档分组显示标签。AI 写教程/报告后跑一次 convert(或 tags)即可, 无感、零额外 token。代码链路追踪走单步调试式: 按场景沿调用链逐行写成扩展 0.9.0+ cjtag 标签, 侧边栏可顺读; 附 check_steps.py 导入前逐步核对源码行。",
+  "version": "0.5.0",
+  "description": "把 markdown 文档中的 path:line 代码引用批量转换为 Code Jump Tags 扩展的 vscode:// 跳转链接(带漂移恢复 pattern), VS Code 与 Obsidian 中均可点击跳转; 可同步写入 .code-jump-tags/store.json 使扩展侧边栏按文档分组显示标签。AI 写教程/报告后跑一次 convert(或 tags)即可, 无感、零额外 token。代码链路追踪走引导式: 先从变量读写点摸起, 再按场景写检查点, 每点告诉用户用 F12/调用层次/查找引用/全局搜索怎么手动跳到下一步, 写进扩展 0.9.0+ 的 cjtag 侧边栏标签; 附 check_steps.py 导入前逐步核对源码行。",
   "author": { "name": "xu" },
   "keywords": ["code-jump-tags", "vscode", "markdown", "deep-link", "obsidian"]
 }
