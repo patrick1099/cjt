@@ -61,6 +61,7 @@ CLI=$(ls -d ~/.vscode/extensions/patrick1099.code-jump-tags-* | sort -V | tail -
 
 - `import` 不去重。整棵重建：先 `clear --folder "<链路名>"` 再 import（进回收站可恢复）。
 - 追加：只导新条目，或 `add --folder --file --line --note`；插到场景中间就整个场景重导。
+- 标签多了嫌乱：`hide --folder "<链路名>"` 隐藏编辑器标记（子文件夹跟着隐藏，侧边栏照常列、点哪条临时显示哪条），`show` 恢复。需扩展 ≥ 0.9.4。
 
 ### 交付
 
