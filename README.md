@@ -1,5 +1,7 @@
 # cjt — Code Jump Tags CLI
 
+首次安装、换机器、换宿主或依赖缺失时，先读[安装与适配](SETUP.md)；环境已就绪时直接按下文使用。
+
 把 markdown 文档中的 `path:line` 代码引用批量转换为
 [Code Jump Tags](https://marketplace.visualstudio.com/items?itemName=patrick1099.code-jump-tags)
 扩展的 `vscode://` 跳转链接。链接自带行内容 pattern，代码漂移后仍可恢复定位。
